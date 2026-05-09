@@ -1,0 +1,36 @@
+
+
+server:
+  host: "0.0.0.0"
+  port: 8080
+
+
+upstreams:
+  - name: "qwen3-small"
+    url: "http://localhost:8000"
+    model_id: "Qwen/Qwen2.5-3B-Instruct-AWQ"
+    timeout: 600
+
+
+routing:
+  default: "qwen3-small"
+  models:
+    qwen3: "qwen3-small"
+    fast: "qwen3-small"
+
+
+api_keys:
+  - key: "dev-test-key-12345"
+    name: "Local development"
+    rate_limit:
+      tokens_per_second: 2.0
+      bucket_size: 10
+  - key: "demo-key-67890"
+    name: "Demo client"
+    rate_limit:
+      tokens_per_second: 0.5
+      bucket_size: 5
+
+logging:
+  level: "INFO"
+  requests_log_path: "./logs/request.jsonl"
