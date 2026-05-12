@@ -30,13 +30,6 @@ async def lifespan(app: FastAPI):
     """Жизненный цикл: инициализация при старте, очистка при остановке."""
     config = load_config("config.yaml")
 
-    # Инициализация singleton'ов
-    init_auth(AuthService(config.api_keys))
-    init_rate_limiter(RateLimiter())
-    init_upstreams(config.upstreams)
-    init_router(config.routing)
-    init_request_logger(config.logging.requests_log_path)
-
     logging.basicConfig(
         level=config.logging.level,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -47,6 +40,15 @@ async def lifespan(app: FastAPI):
         len(config.upstreams),
         len(config.api_keys),
     )
+
+    # Инициализация singleton'ов
+    init_auth(AuthService(config.api_keys))
+    init_rate_limiter(RateLimiter())
+    init_upstreams(config.upstreams)
+    init_router(config.routing)
+    init_request_logger(config.logging.requests_log_path)
+
+
 
     yield
 
@@ -66,10 +68,11 @@ app = FastAPI(
 # --- Exception handlers ---
 
 UPSTREAM_ERROR_STATUS_MAP = {
-    "timeout": 504,
-    "connection": 503,
-    "upstream_error": 502,
-    "bad_response": 502,
+    "TIMEOUT": 504,
+    "CONNECTION": 503,
+    "UPSTREAM_ERROR": 502,
+    "BAD_RESPONSE": 502,
+    "HTTP_ERROR": 500
 }
 
 
@@ -80,11 +83,12 @@ async def upstream_error_handler(request: Request, exc: UpstreamError) -> JSONRe
     status_code = UPSTREAM_ERROR_STATUS_MAP.get(exc.category, 500)
     logger.warning("Upstream error [%s]: %s", exc.category, exc.detail)
 
+
     model = getattr(request.state, "model", "unknown")
     client = getattr(request.state, "client", "unknown")
 
     await get_request_logger().log_request(
-        request_id=str(uuid.uuid4()),  # у нас здесь нет оригинального request_id
+        request_id=request.state.request_id,  # у нас здесь нет оригинального request_id
         client=client,
         model=model,
         prompt="",  # не имеем доступа к телу здесь
@@ -125,11 +129,14 @@ async def metrics_middleware(request: Request, call_next):
 
     IN_FLIGHT.inc()
     start = time.monotonic()
+    request_body = await request.body()
+    request.state.prompt = request_body["prompt"]
 
     try:
         response = await call_next(request)
         status = str(response.status_code)
     except Exception:
+        request.state.request_id = str(uuid.uuid4())
         status = "500"
         raise
     finally:
@@ -156,9 +163,10 @@ async def generate(
     http_request.state.model = request.model
     http_request.state.client = api_key.name
 
-    request_id = str(uuid.uuid4())
+    request_id = request.state.request_id
 
     upstream = get_router().resolve(request.model)
+
     response = await upstream.generate(request, request_id=request_id)
 
     TOKENS_TOTAL.labels(kind="prompt", model=request.model).inc(response.usage.prompt_tokens)

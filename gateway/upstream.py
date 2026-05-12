@@ -1,5 +1,6 @@
 import json
 import time
+from enum import Enum
 
 import httpx
 from pydantic import ValidationError
@@ -12,9 +13,18 @@ from gateway.schemas import (
     Usage,
 )
 
+
+
+class UpstreamErrorCategory(str, Enum):
+    TIMEOUT = "TIMEOUT"
+    CONNECTION = "CONNECTION"
+    UPSTREAM_ERROR = "UPSTREAM_ERROR"
+    BAD_RESPONSE = "BAD_RESPONSE"
+    HTTP_ERROR = "HTTP_ERROR"
+
 class UpstreamError(Exception):
 
-    def __init__(self, category: str, detail: str) -> None:
+    def __init__(self, category: UpstreamErrorCategory, detail: str) -> None:
         super().__init__(f"{category}: {detail}")
         self.category = category
         self.detail = detail
@@ -50,14 +60,14 @@ class UpstreamClient:
             response = await self._client.post("/v1/chat/completions", json=payload)
 
         except httpx.TimeoutException  as e:
-            raise UpstreamError("timeout", str(e))
+            raise UpstreamError(UpstreamErrorCategory.TIMEOUT, str(e))
         except httpx.ConnectError  as e:
-            raise UpstreamError("connect", str(e))
+            raise UpstreamError(UpstreamErrorCategory.CONNECTION, str(e))
         except httpx.HTTPError  as e:
-            raise UpstreamError("http error", str(e))
+            raise UpstreamError(UpstreamErrorCategory.HTTP_ERROR, str(e))
 
         if response.status_code != 200:
-            raise UpstreamError("upstream_error", f"vLLM returned {response.status_code}: {response.text[:200]}")
+            raise UpstreamError(UpstreamErrorCategory.UPSTREAM_ERROR, f"vLLM returned {response.status_code}: {response.text[:200]}")
 
         try:
             json_response = response.json()
@@ -67,7 +77,7 @@ class UpstreamClient:
 
 
         except (json.JSONDecodeError, KeyError, IndexError) as e:
-            raise UpstreamError("bad_response", f"unexpected response structure: {e}")
+            raise UpstreamError(UpstreamErrorCategory.BAD_RESPONSE, f"unexpected response structure: {e}")
 
         try:
             reason_of_finish = FinishReason(reason_of_finish)
@@ -87,7 +97,7 @@ class UpstreamClient:
             )
 
         except ValidationError as e:
-            raise UpstreamError("bad_response", f"validation error: {e}")
+            raise UpstreamError(UpstreamErrorCategory.BAD_RESPONSE, f"validation error: {e}")
 
 
 
