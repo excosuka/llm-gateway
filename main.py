@@ -1,3 +1,4 @@
+import json
 import logging
 import time
 import uuid
@@ -72,16 +73,16 @@ UPSTREAM_ERROR_STATUS_MAP = {
     "CONNECTION": 503,
     "UPSTREAM_ERROR": 502,
     "BAD_RESPONSE": 502,
-    "HTTP_ERROR": 500
+    "HTTP_ERROR": 502
 }
 
 
 @app.exception_handler(UpstreamError)
 async def upstream_error_handler(request: Request, exc: UpstreamError) -> JSONResponse:
-    UPSTREAM_ERRORS_TOTAL.labels(category=exc.category).inc()
+    UPSTREAM_ERRORS_TOTAL.labels(category=exc.category.value).inc()
 
-    status_code = UPSTREAM_ERROR_STATUS_MAP.get(exc.category, 500)
-    logger.warning("Upstream error [%s]: %s", exc.category, exc.detail)
+    status_code = UPSTREAM_ERROR_STATUS_MAP.get(exc.category.value, 500)
+    logger.warning("Upstream error [%s]: %s", exc.category.value, exc.detail)
 
 
     model = getattr(request.state, "model", "unknown")
@@ -91,20 +92,20 @@ async def upstream_error_handler(request: Request, exc: UpstreamError) -> JSONRe
         request_id=request.state.request_id,  # у нас здесь нет оригинального request_id
         client=client,
         model=model,
-        prompt="",  # не имеем доступа к телу здесь
+        prompt=request.state.prompt,
         response_text=None,
         prompt_tokens=None,
         completion_tokens=None,
         latency_ms=None,
         status_code=status_code,
         finish_reason=None,
-        error_category=exc.category,
+        error_category=exc.category.value,
         error_detail=exc.detail,
     )
 
     return JSONResponse(
         status_code=status_code,
-        content={"error": exc.category, "detail": exc.detail},
+        content={"error": exc.category.value, "detail": exc.detail},
     )
 
 
@@ -124,19 +125,32 @@ async def metrics() -> Response:
 
 @app.middleware("http")
 async def metrics_middleware(request: Request, call_next):
+
+    request.state.prompt = None
+    request.state.request_id = str(uuid.uuid4())
     if request.url.path in ("/metrics", "/health"):
         return await call_next(request)
 
     IN_FLIGHT.inc()
     start = time.monotonic()
-    request_body = await request.body()
-    request.state.prompt = request_body["prompt"]
+
+    if request.url.path == "/v1/generate":
+        request_body = await request.body()
+        try:
+            request_body = json.loads(request_body)
+            request.state.prompt = request_body["prompt"]
+        except Exception:
+            logger.warning("Failed to parse request body")
+
+
+
 
     try:
+
         response = await call_next(request)
         status = str(response.status_code)
     except Exception:
-        request.state.request_id = str(uuid.uuid4())
+
         status = "500"
         raise
     finally:
@@ -156,14 +170,13 @@ async def metrics_middleware(request: Request, call_next):
 @app.post("/v1/generate", response_model=GenerateResponse)
 async def generate(
         request: GenerateRequest,
-        http_request: Request,  # ← добавляем для доступа к state
+        http_request: Request,  # ←бавляем для доступа к state до
         api_key: ApiKeyConfig = Depends(enforce_rate_limit),
 ) -> GenerateResponse:
     # Сохраняем для middleware
     http_request.state.model = request.model
     http_request.state.client = api_key.name
-
-    request_id = request.state.request_id
+    request_id = http_request.state.request_id
 
     upstream = get_router().resolve(request.model)
 
@@ -177,7 +190,6 @@ async def generate(
         client=api_key.name,
         model=request.model,
         prompt=request.prompt,
-        prompt_text=request.prompt,
         response_text=response.text,
         prompt_tokens=response.usage.prompt_tokens,
         completion_tokens=response.usage.completion_tokens,
