@@ -1,14 +1,15 @@
-from fastapi import HTTPException, status
+from fastapi import HTTPException, status, Request
 
 from gateway.config import RoutingConfig
-from gateway.upstream import UpstreamClient, get_upstream
+from gateway.upstream import UpstreamClient
 
 
 class Router:
     """Маппит gateway-имя модели на UpstreamClient."""
 
-    def __init__(self, routing: RoutingConfig) -> None:
+    def __init__(self, routing: RoutingConfig, upstreams: dict[str, UpstreamClient]) -> None:
         self._routing = routing
+        self._upstreams = upstreams
 
     def resolve(self, model_name: str) -> UpstreamClient:
         """
@@ -24,23 +25,12 @@ class Router:
             )
 
         try:
-            return get_upstream(model_from_routing)
+            return self._upstreams[model_from_routing]
         except KeyError as e:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Misconfigured routing: {e}",
             )
 
-
-_router: Router | None = None
-
-
-def init_router(routing: RoutingConfig) -> None:
-    global _router
-    _router = Router(routing)
-
-
-def get_router() -> Router:
-    if _router is None:
-        raise RuntimeError("Router is not initialized")
-    return _router
+def get_router(request: Request) -> Router:
+    return request.app.state.router

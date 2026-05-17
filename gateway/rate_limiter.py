@@ -1,7 +1,7 @@
 import time
 from dataclasses import dataclass
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, Request
 
 from gateway.auth_service import get_authenticated_key
 from gateway.config import ApiKeyConfig, RateLimitConfig
@@ -36,23 +36,18 @@ class RateLimiter:
             return True
         return False
 
-_rate_limiter: RateLimiter | None = None
 
-def init_rate_limiter(limiter: RateLimiter) -> None:
-    global _rate_limiter
-    _rate_limiter = limiter
+
+def get_rate_limiter(request: Request) -> RateLimiter:
+    return request.app.state.rate_limiter
 
 
 def enforce_rate_limit(
     api_key: ApiKeyConfig = Depends(get_authenticated_key),
+    rate_limiter: RateLimiter = Depends(get_rate_limiter),
 ) -> ApiKeyConfig:
-    """
-    FastAPI dependency. Проверяет rate limit, бросает 429 при превышении.
-    Возвращает ApiKeyConfig (чтобы дальше можно было использовать в роуте).
-    """
-    if _rate_limiter is None:
-        raise RuntimeError("RateLimiter is not initialized")
-    if not _rate_limiter.try_acquire(api_key.key, api_key.rate_limit):
+
+    if not rate_limiter.try_acquire(api_key.key, api_key.rate_limit):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Rate limit exceeded",

@@ -127,7 +127,7 @@ curl -X POST http://localhost:8080/v1/generate \
 Вся конфигурация в `config.yaml`. Основные секции:
 
 - `server` — host и port шлюза.
-- `upstreams` — список vLLM-инстансов. Каждый описан полями `name`, `url`, `model_id` (реальное имя модели на HF), `timeout`.
+- `upstreams` — список vLLM-инстансов. Каждый описан полями `name`, `url`, `hf_model_id` (реальное имя модели на HF), `timeout`.
 - `routing` — маппинг дружественных имён моделей на upstream-имена. Поле `default` зарезервировано на будущее.
 - `api_keys` — список API-ключей с индивидуальными rate limit-настройками.
 - `logging` — уровень логов и путь к request log'у.

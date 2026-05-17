@@ -1,6 +1,6 @@
 
 
-from fastapi import HTTPException, Depends
+from fastapi import HTTPException, Depends, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from gateway.config import ApiKeyConfig
@@ -18,24 +18,20 @@ class AuthService:
         return config
 
 
-
-_auth_service: AuthService | None = None
-
-
-def init_auth(service: AuthService) -> None:
-    global _auth_service
-    _auth_service = service
+def get_auth_service(request: Request) -> AuthService:
+    return request.app.state.auth_service
 
 
 def get_authenticated_key(
         credentials: HTTPAuthorizationCredentials  | None = Depends(bearer_scheme),
+        auth_service: AuthService = Depends(get_auth_service)
 ) -> ApiKeyConfig:
-    """FastAPI dependency. Возвращает ApiKeyConfig для текущего запроса."""
-    if _auth_service is None:
-        raise RuntimeError("AuthService is not initialized")
+
     if credentials is None:
         raise HTTPException(
             status_code=401,
             detail="Missing Authorization header",
         )
-    return _auth_service.authenticate(credentials.credentials)
+
+    return auth_service.authenticate(credentials.credentials)
+

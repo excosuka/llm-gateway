@@ -11,7 +11,7 @@ class ServerConfig(BaseModel):
 class UpstreamConfig(BaseModel):
     name: str
     url: str
-    model_id: str
+    hf_model_id: str
     timeout: float
 
 

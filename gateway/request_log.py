@@ -6,6 +6,8 @@ from typing import Any
 
 import aiofiles
 
+from fastapi import  Request
+
 
 logger = logging.getLogger(__name__)
 
@@ -57,15 +59,6 @@ class RequestLogger:
 
 
 
-_request_logger: RequestLogger | None = None
 
-
-def init_request_logger(path: str | Path) -> None:
-    global _request_logger
-    _request_logger = RequestLogger(path)
-
-
-def get_request_logger() -> RequestLogger:
-    if _request_logger is None:
-        raise RuntimeError("RequestLogger is not initialized")
-    return _request_logger
+def get_request_logger(request: Request) -> RequestLogger:
+    return request.app.state.request_logger

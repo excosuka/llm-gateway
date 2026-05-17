@@ -49,7 +49,7 @@ class UpstreamClient:
         start_time = time.monotonic()
 
         payload = {
-            "model": self._upstream.model_id,
+            "model": self._upstream.hf_model_id,
             "messages": [{"role": "user", "content": request.prompt}],
             "max_tokens": request.max_tokens,
             "temperature": request.temperature,
@@ -101,22 +101,10 @@ class UpstreamClient:
 
 
 
-
-_clients: dict[str, UpstreamClient] = {}
-
-
-def init_upstreams(upstreams: list[UpstreamConfig]) -> None:
+def build_upstreams (upstreams: list[UpstreamConfig]) -> dict[str, UpstreamClient]:
+    _clients = {}
     for upstream in upstreams:
         _clients[upstream.name] = UpstreamClient(upstream)
 
+    return _clients
 
-def get_upstream(name: str) -> UpstreamClient:
-    client = _clients.get(name)
-    if client is None:
-        raise KeyError(f"Upstream '{name}' is not configured")
-    return client
-
-
-async def close_all_upstreams() -> None:
-    for client in _clients.values():
-        await client.close()

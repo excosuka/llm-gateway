@@ -8,18 +8,16 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 
-from gateway.auth_service import AuthService, init_auth
+from gateway.auth_service import AuthService
 from gateway.config import ApiKeyConfig, load_config
 from gateway.metrics import IN_FLIGHT, REQUESTS_TOTAL, REQUEST_DURATION, TOKENS_TOTAL, UPSTREAM_ERRORS_TOTAL
-from gateway.rate_limiter import RateLimiter, init_rate_limiter, enforce_rate_limit
-from gateway.request_log import init_request_logger, get_request_logger
+from gateway.rate_limiter import RateLimiter, enforce_rate_limit
+from gateway.request_log import get_request_logger, RequestLogger
 
-from gateway.router import get_router, init_router
+from gateway.router import get_router, Router
 from gateway.schemas import GenerateRequest, GenerateResponse
 from gateway.upstream import (
-    UpstreamError,
-    close_all_upstreams,
-    init_upstreams,
+    UpstreamError, build_upstreams,
 )
 
 
@@ -43,11 +41,11 @@ async def lifespan(app: FastAPI):
     )
 
     # Инициализация singleton'ов
-    init_auth(AuthService(config.api_keys))
-    init_rate_limiter(RateLimiter())
-    init_upstreams(config.upstreams)
-    init_router(config.routing)
-    init_request_logger(config.logging.requests_log_path)
+    app.state.auth_service = AuthService(config.api_keys)
+    app.state.rate_limiter = RateLimiter()
+    app.state.upstreams = build_upstreams(config.upstreams)
+    app.state.router = Router(config.routing, app.state.upstreams)
+    app.state.request_logger = RequestLogger(config.logging.requests_log_path)
 
 
 
@@ -55,7 +53,11 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     logger.info("Shutting down...")
-    await close_all_upstreams()
+
+    for client in app.state.upstreams.values():
+        await client.close()
+
+
     logger.info("Goodbye.")
 
 
@@ -88,7 +90,7 @@ async def upstream_error_handler(request: Request, exc: UpstreamError) -> JSONRe
     model = getattr(request.state, "model", "unknown")
     client = getattr(request.state, "client", "unknown")
 
-    await get_request_logger().log_request(
+    await request.app.state.request_logger.log_request(
         request_id=request.state.request_id,  # у нас здесь нет оригинального request_id
         client=client,
         model=model,
@@ -170,22 +172,23 @@ async def metrics_middleware(request: Request, call_next):
 @app.post("/v1/generate", response_model=GenerateResponse)
 async def generate(
         request: GenerateRequest,
-        http_request: Request,  # ←бавляем для доступа к state до
+        http_request: Request,
         api_key: ApiKeyConfig = Depends(enforce_rate_limit),
+        router: Router = Depends(get_router),
+        logger: RequestLogger = Depends(get_request_logger),
 ) -> GenerateResponse:
-    # Сохраняем для middleware
     http_request.state.model = request.model
     http_request.state.client = api_key.name
     request_id = http_request.state.request_id
 
-    upstream = get_router().resolve(request.model)
+    upstream = router.resolve(request.model)
 
     response = await upstream.generate(request, request_id=request_id)
 
     TOKENS_TOTAL.labels(kind="prompt", model=request.model).inc(response.usage.prompt_tokens)
     TOKENS_TOTAL.labels(kind="completion", model=request.model).inc(response.usage.completion_tokens)
 
-    await get_request_logger().log_request(
+    await logger.log_request(
         request_id=request_id,
         client=api_key.name,
         model=request.model,
